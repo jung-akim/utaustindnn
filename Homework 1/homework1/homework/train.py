@@ -40,7 +40,7 @@ def train(args):
             # Compute the loss
             o = model(train_batch)
             loss_val = loss.forward(o, train_label)
-            print(f'loss {loss_val}')
+            # print(f'loss {loss_val}')
 
             loss_val.backward()
             optimizer.step() # Gradient becomes NaN if learning rate is too large
@@ -66,7 +66,7 @@ def train(args):
         if max_acc_valid < valid_accuracy:
             max_acc_valid = valid_accuracy
             save_model(model)
-            print(f'train accuracy: {train_accuracy}, valid accuracy : {valid_accuracy}, num_epoch : {epoch}')
+        print(f'train accuracy: {train_accuracy}, valid accuracy : {valid_accuracy}, num_epoch : {epoch+1}')
 
 
     print('\n\n')

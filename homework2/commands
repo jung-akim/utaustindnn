@@ -1,0 +1,1 @@
+python3 train.py -log log -l 0.1 -o 0.99 -w 0.0001
