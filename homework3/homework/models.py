@@ -70,7 +70,7 @@ class CNNClassifier(torch.nn.Module):
 
 class FCN(torch.nn.Module):
     class Block(torch.nn.Module):
-        def __init__(self, n_input, n_output, stride = 1, kernel_size = 3, padding=1, resnet = False):
+        def __init__(self, n_input, n_output, stride = 1, kernel_size = 3, padding=1):
             super().__init__()
             self.net = torch.nn.Sequential(
                 torch.nn.Conv2d(n_input, n_output, kernel_size=kernel_size, padding=padding, stride=stride, bias=False),
@@ -83,21 +83,19 @@ class FCN(torch.nn.Module):
 
             self.downsample = None
 
-            if resnet:
-                # Making the same (n_input, n_output) shape as input for residual network
-                if stride != 1 or n_input != n_output:
-                    self.downsample = torch.nn.Sequential(torch.nn.Dropout2d(0.2),
-                                                          torch.nn.Conv2d(n_input, n_output, kernel_size=1, stride=stride),
-                                                          torch.nn.BatchNorm2d(n_output))
+            # Making the same (n_input, n_output) shape as input for residual network
+            if stride != 1 or n_input != n_output:
+                self.downsample = torch.nn.Sequential(torch.nn.Dropout2d(0.2),
+                                                      torch.nn.Conv2d(n_input, n_output, kernel_size=1, stride=stride),
+                                                      torch.nn.BatchNorm2d(n_output),
+                                                      torch.nn.ReLU())
         def forward(self, x):
+            identity = x
             if self.downsample is not None:
-                identity = x
-                identity = self.downsample(identity)
-                return self.net(x) + identity
-            else:
-                return self.net(x)
+                return self.net(x) + self.downsample(identity)
+            return self.net(x)
 
-    def __init__(self, layers = [16, 32, 64], stride = 2, padding = 1, n_input_channels = 3, resnet = False):
+    def __init__(self, layers = [16, 32, 64, 128], stride = 2, kernel_size = 3, n_input_channels = 3):
         super().__init__()
         """
         Your code here.
@@ -112,22 +110,28 @@ class FCN(torch.nn.Module):
         L = []
 
         # Regular NN
-        # 3   -> 16 -> 32 -> 64 -> 32 -> 16 -> NUM_CLASSES
-        # 96  -> 48 -> 24 -> 12 -> 24 -> 48 -> 96
-        # 128 -> 64 -> 32 -> 16 -> 32 -> 64 -> 128
+        # 3   -> 16 -> 32 -> 64 -> 32+32 -> 16+16 -> NUM_CLASSES
+        # 96  -> 48 -> 24 -> 12 -> 24    -> 48    -> 96
+        # 128 -> 64 -> 32 -> 16 -> 32    -> 64    -> 128
 
-        self.net1 = self.Block(n_input_channels, layers[0], stride=2, padding=1, kernel_size=3, resnet=True)
-        self.down1 = torch.nn.Sequential(torch.nn.Conv2d(n_input_channels, NUM_CLASSES, kernel_size=1, stride = 1))
+        s, p, k = stride, stride//2, kernel_size
 
-        self.net2 = self.Block(layers[0], layers[1], stride=2, padding=1, kernel_size=3, resnet=True)
-        self.down2 = torch.nn.Sequential(torch.nn.Conv2d(layers[0], layers[0], kernel_size=1, stride = 1))
+        self.net1 = self.Block(n_input_channels, layers[0], stride=s, padding=p, kernel_size=k)
+        # self.down4 = torch.nn.Conv2d(n_input_channels, NUM_CLASSES, kernel_size=1, stride = 1)
 
-        self.net3 = self.Block(layers[1], layers[2], stride=2, padding=1, kernel_size=3, resnet=True)
-        self.down3 = torch.nn.Sequential(torch.nn.Conv2d(layers[1], layers[1], kernel_size=1, stride = 1))
+        self.net2 = self.Block(layers[0], layers[1], stride=s, padding=p, kernel_size=k)
+        self.down3 = torch.nn.Conv2d(layers[0], layers[0], kernel_size=1, stride = 1)
 
-        self.net4 = torch.nn.ConvTranspose2d(layers[2], layers[1], kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.net5 = torch.nn.ConvTranspose2d(layers[1], layers[0], kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.net6 = torch.nn.ConvTranspose2d(layers[0], NUM_CLASSES, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.net3 = self.Block(layers[1], layers[2], stride=s, padding=p, kernel_size=k)
+        self.down2 = torch.nn.Conv2d(layers[1], layers[1], kernel_size=1, stride = 1)
+
+        self.net4 = self.Block(layers[2], layers[3], stride = s, padding = p, kernel_size=k)
+        self.down1 = torch.nn.Conv2d(layers[2], layers[2], kernel_size=1, stride = 1)
+
+        self.net5 = torch.nn.ConvTranspose2d(layers[3], layers[2], kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.net6 = torch.nn.ConvTranspose2d(layers[2] + layers[2], layers[1], kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.net7 = torch.nn.ConvTranspose2d(layers[1] + layers[1], layers[0], kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.net8 = torch.nn.ConvTranspose2d(layers[0] + layers[0], NUM_CLASSES, kernel_size=k, stride=s, padding=p, output_padding=1)
 
         self.dropout = torch.nn.Dropout2d(0.2)
 
@@ -144,15 +148,20 @@ class FCN(torch.nn.Module):
         x1 = self.net1(x)
         x2 = self.net2(x1)
         x3 = self.net3(x2)
+        x4 = self.net4(x3)
 
-        x4 = self.net4(x3)[:, :, :x2.shape[2], :x2.shape[3]]
-        x4 += self.down3(x2)
-        x5 = self.net5(x4)[:, :, :x1.shape[2], :x1.shape[3]]
-        x5 += self.down2(x1)
-        x6 = self.net6(x5)[:, :, :x.shape[2], :x.shape[3]]
-        x6 += self.down1(x)
+        x5 = self.net5(x4)[:, :, :x3.shape[2], :x3.shape[3]] # Cut off potential over-padding caused by output_padding
+        x5 = torch.cat((x5, self.down1(x3)), 1)
 
-        return x6
+        x6 = self.net6(x5)[:, :, :x2.shape[2], :x2.shape[3]]
+        x6 = torch.cat((x6, self.down2(x2)), 1)
+
+        x7 = self.net7(x6)[:, :, :x1.shape[2], :x1.shape[3]]
+        x7 = torch.cat((x7, self.down3(x1)), 1)
+
+        x8 = self.net8(x7)[:, :, :x.shape[2], :x.shape[3]]
+
+        return x8
 
 model_factory = {
     'cnn': CNNClassifier,
@@ -172,14 +181,14 @@ def save_model(model):
 def load_model(model):
     from torch import load
     from os import path
-    r = model_factory[model](resnet=True)
+    r = model_factory[model]()
     r.load_state_dict(load(path.join(path.dirname(path.abspath(__file__)), '%s.th' % model), map_location='cpu'))
     return r
 
 if __name__ == '__main__':
-    model = FCN(resnet=True)
+    model = FCN()
     x = torch.rand(128, 3, 96, 128)
-    x = torch.rand(1, 3, 1, 1)
+    # x = torch.rand(1, 3, 1, 1)
     model.eval()
     y = model(x)
 

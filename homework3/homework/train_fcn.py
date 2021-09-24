@@ -146,7 +146,7 @@ if __name__ == '__main__':
     cpu_count = multiprocessing.cpu_count()
 
     train_transform = dense_transforms.Compose([
-                                                # dense_transforms.RandomHorizontalFlip(),
+                                                dense_transforms.RandomHorizontalFlip(),
                                                 dense_transforms.ColorJitter(brightness=.5, hue=.3),
                                                 # dense_transforms.RandomCrop(96),
                                                 dense_transforms.ToTensor()
@@ -154,9 +154,9 @@ if __name__ == '__main__':
     train_data = load_dense_data(args.data_dir + '/train', batch_size=int(args.batch), shuffle = True, num_workers=0, transform = train_transform) # num_workers = 0 to run debugger
     valid_data = load_dense_data(args.data_dir + '/valid', batch_size=int(args.batch), shuffle = False, num_workers=0)
 
-    optimizer = torch.optim.Adam(net.parameters(),
+    optimizer = torch.optim.SGD(net.parameters(),
                                  lr = float(args.lr),
-                                 # momentum = float(args.mom),
+                                 momentum = float(args.mom),
                                  weight_decay = float(args.wd))
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience = 15)
 
