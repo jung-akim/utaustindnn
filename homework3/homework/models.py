@@ -70,13 +70,13 @@ class CNNClassifier(torch.nn.Module):
 
 class FCN(torch.nn.Module):
     class Block(torch.nn.Module):
-        def __init__(self, n_input, n_output, stride = 1, kernel_size = 3, padding=1):
+        def __init__(self, n_input, n_output, stride = 2, kernel_size = 3, padding=1):
             super().__init__()
             self.net = torch.nn.Sequential(
-                torch.nn.Conv2d(n_input, n_output, kernel_size=kernel_size, padding=padding, stride=stride, bias=False),
+                torch.nn.Conv2d(n_input, n_output, kernel_size=kernel_size, padding=padding, stride=stride),
                 torch.nn.BatchNorm2d(n_output),
                 torch.nn.ReLU(),
-                torch.nn.Conv2d(n_output, n_output, kernel_size=kernel_size, padding=padding, bias=False),
+                torch.nn.Conv2d(n_output, n_output, kernel_size=kernel_size, padding=padding),
                 torch.nn.BatchNorm2d(n_output),
                 torch.nn.ReLU()
             )
@@ -90,9 +90,8 @@ class FCN(torch.nn.Module):
                                                       torch.nn.BatchNorm2d(n_output),
                                                       torch.nn.ReLU())
         def forward(self, x):
-            identity = x
             if self.downsample is not None:
-                return self.net(x) + self.downsample(identity)
+                return self.net(x) + self.downsample(x)
             return self.net(x)
 
     def __init__(self, layers = [16, 32, 64, 128], stride = 2, kernel_size = 3, n_input_channels = 3):
@@ -110,14 +109,13 @@ class FCN(torch.nn.Module):
         L = []
 
         # Regular NN
-        # 3   -> 16 -> 32 -> 64 -> 32+32 -> 16+16 -> NUM_CLASSES
-        # 96  -> 48 -> 24 -> 12 -> 24    -> 48    -> 96
-        # 128 -> 64 -> 32 -> 16 -> 32    -> 64    -> 128
+        # 3   -> 16 -> 32 -> 64 -> 128 -> 64 + 64 -> 32 + 32 -> 16 + 16 -> NUM_CLASSES
+        # 96  -> 48 -> 24 -> 12 -> 6   -> 12      -> 24      -> 48      -> 96
+        # 128 -> 64 -> 32 -> 16 -> 8   -> 16      -> 32      -> 64      -> 128
 
         s, p, k = stride, stride//2, kernel_size
 
         self.net1 = self.Block(n_input_channels, layers[0], stride=s, padding=p, kernel_size=k)
-        # self.down4 = torch.nn.Conv2d(n_input_channels, NUM_CLASSES, kernel_size=1, stride = 1)
 
         self.net2 = self.Block(layers[0], layers[1], stride=s, padding=p, kernel_size=k)
         self.down3 = torch.nn.Conv2d(layers[0], layers[0], kernel_size=1, stride = 1)

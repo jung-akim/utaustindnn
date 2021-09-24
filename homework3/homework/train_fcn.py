@@ -146,7 +146,7 @@ if __name__ == '__main__':
     cpu_count = multiprocessing.cpu_count()
 
     train_transform = dense_transforms.Compose([
-                                                dense_transforms.RandomHorizontalFlip(),
+                                                # dense_transforms.RandomHorizontalFlip(),
                                                 dense_transforms.ColorJitter(brightness=.5, hue=.3),
                                                 # dense_transforms.RandomCrop(96),
                                                 dense_transforms.ToTensor()
