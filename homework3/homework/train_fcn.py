@@ -8,7 +8,7 @@ import torch.utils.tensorboard as tb
 import multiprocessing
 
 
-def train(model, train_data, valid_data, device, n_epochs, optimizer, logdir, scheduler, retrain = None):
+def train(model, train_data, valid_data, device, n_epochs, optimizer, logdir, retrain = None):
     from os import path
     train_logger, valid_logger = None, None
     if args.log_dir is not None:
@@ -28,28 +28,24 @@ def train(model, train_data, valid_data, device, n_epochs, optimizer, logdir, sc
         model = load_model('fcn').to(device)
 
     loss = torch.nn.CrossEntropyLoss(weight = (1 / torch.FloatTensor(DENSE_CLASS_DISTRIBUTION)).to(device))
-    conf = ConfusionMatrix()
-    conf_val = ConfusionMatrix()
     max_acc_train, max_acc_valid = 0, 0
 
     # Set up counters and patience
     counter, saved_epoch, patience_counter = 0, 0, 0
-    patience = 20
+    patience = 1000
 
     for epoch in range(int(n_epochs)):
-
+        conf = ConfusionMatrix()
         # Iterate
         IOUs = []
         model.train()
 
+        print("Loss: ", end = ' ')
         for train_batch, train_label in train_data:
 
             # Compute the loss
             train_batch = train_batch.to(device)
             train_label = train_label.to(device)
-
-            # Data Augmentation
-
 
             o = model(train_batch)
             loss_val = loss.forward(o, train_label.long())
@@ -57,7 +53,7 @@ def train(model, train_data, valid_data, device, n_epochs, optimizer, logdir, sc
 
             IOUs.append(conf.iou.detach().cpu().numpy())
             if counter % 10 == 0:
-                print(f'loss {loss_val}')
+                print(f'{loss_val:.6f}', end = ' -> ')
 
             optimizer.zero_grad()
             loss_val.backward()
@@ -65,13 +61,37 @@ def train(model, train_data, valid_data, device, n_epochs, optimizer, logdir, sc
 
             counter += 1
             train_logger.add_scalar('loss', loss_val, global_step=counter)
+            train_logger.add_histogram('net8', model.net8.weight.grad, global_step=counter)
+            train_logger.add_histogram('down3', model.down3.weight.grad, global_step=counter)
+            train_logger.add_histogram('net7', model.net7.weight.grad, global_step=counter)
+            train_logger.add_histogram('down2', model.down2.weight.grad, global_step=counter)
+            train_logger.add_histogram('net6', model.net6.weight.grad, global_step=counter)
+            train_logger.add_histogram('down1', model.down1.weight.grad, global_step=counter)
+
+            train_logger.add_histogram('net5-conv1', model.net5.net[0].weight.grad, global_step=counter)
+            train_logger.add_histogram('net5-conv2', model.net5.net[3].weight.grad, global_step=counter)
+
+            train_logger.add_histogram('net4-conv1', model.net4.net[0].weight.grad, global_step=counter)
+            train_logger.add_histogram('net4-conv2', model.net4.net[3].weight.grad, global_step=counter)
+
+            train_logger.add_histogram('net3-conv1', model.net3.net[0].weight.grad, global_step=counter)
+            train_logger.add_histogram('net3-conv2', model.net3.net[3].weight.grad, global_step=counter)
+
+            train_logger.add_histogram('net2-conv1', model.net2.net[0].weight.grad, global_step=counter)
+            train_logger.add_histogram('net2-conv2', model.net2.net[3].weight.grad, global_step=counter)
+
+            train_logger.add_histogram('net1-conv1', model.net1.net[0].weight.grad, global_step=counter)
+            train_logger.add_histogram('net1-conv2', model.net1.net[3].weight.grad, global_step=counter)
+
 
         train_iou = np.mean(IOUs)
         train_logger.add_scalar('train_iou', train_iou, global_step=counter)
 
         model.eval()
         val_IOUs = []
+        conf_val = ConfusionMatrix()
         for valid_batch, valid_label in valid_data:
+
             with torch.no_grad():
                 valid_batch = valid_batch.to(device)
                 valid_label = valid_label.to(device)
@@ -85,10 +105,11 @@ def train(model, train_data, valid_data, device, n_epochs, optimizer, logdir, sc
         valid_logger.add_scalar('valid_iou', valid_iou, global_step=counter)
 
         # Log and Update the Learning Rate with scheduler
-        train_logger.add_scalar('lr', optimizer.param_groups[0]['lr'], global_step=counter)
-        scheduler.step(valid_iou)
+        # train_logger.add_scalar('lr', optimizer.param_groups[0]['lr'], global_step=counter)
+        # scheduler.step(valid_iou)
 
-        print(f'train iou: {train_iou}, valid iou: {valid_iou}, num_epoch: {epoch + 1}')
+        print(f'train iou: {train_iou:.6f}, valid iou: {valid_iou:.6f}, num_epoch: {epoch + 1}')
+
         # Evaluate the model
         if max_acc_valid < valid_iou:
             patience_counter = 0
@@ -146,21 +167,22 @@ if __name__ == '__main__':
     cpu_count = multiprocessing.cpu_count()
 
     train_transform = dense_transforms.Compose([
-                                                # dense_transforms.RandomHorizontalFlip(),
-                                                dense_transforms.ColorJitter(brightness=.5, hue=.3),
-                                                # dense_transforms.RandomCrop(96),
+    #                                           dense_transforms.RandomHorizontalFlip(),
+    #                                           dense_transforms.ColorJitter(brightness=.5, hue=.3),
+    #                                           dense_transforms.RandomCrop(96),
                                                 dense_transforms.ToTensor()
                                                 ])
-    train_data = load_dense_data(args.data_dir + '/train', batch_size=int(args.batch), shuffle = True, num_workers=0, transform = train_transform) # num_workers = 0 to run debugger
-    valid_data = load_dense_data(args.data_dir + '/valid', batch_size=int(args.batch), shuffle = False, num_workers=0)
 
-    optimizer = torch.optim.SGD(net.parameters(),
+    train_data = load_dense_data(args.data_dir + '/train', batch_size=int(args.batch), shuffle = True, num_workers=0, transform = train_transform) # num_workers = 0 to run debugger
+    valid_data = load_dense_data(args.data_dir + '/valid', batch_size=int(args.batch), shuffle = False, num_workers=0, transform = train_transform)
+
+    optimizer = torch.optim.Adam(net.parameters(),
                                  lr = float(args.lr),
-                                 momentum = float(args.mom),
+                                 # momentum = float(args.mom),
                                  weight_decay = float(args.wd))
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience = 15)
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience = 15)
 
     # Train
     train(net, train_data=train_data, valid_data=valid_data, device=device,
-          n_epochs=args.epoch, optimizer=optimizer, logdir=args.log_dir, scheduler = scheduler, retrain=args.retrain)
+          n_epochs=args.epoch, optimizer=optimizer, logdir=args.log_dir, retrain=args.retrain)
 

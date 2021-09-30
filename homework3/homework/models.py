@@ -1,6 +1,8 @@
 import torch
 import torch.nn.functional as F
-
+from homework.utils import *
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+TRAIN_MEAN, TRAIN_STD = 0., 0.
 
 class CNNClassifier(torch.nn.Module):
     class Block(torch.nn.Module):
@@ -67,10 +69,9 @@ class CNNClassifier(torch.nn.Module):
         # return self.classifier(z)[:, 0]
         return self.classifier(z)
 
-
 class FCN(torch.nn.Module):
     class Block(torch.nn.Module):
-        def __init__(self, n_input, n_output, stride = 2, kernel_size = 3, padding=1):
+        def __init__(self, n_input, n_output, stride = 2, kernel_size = 3, padding=1, maxpool = False):
             super().__init__()
             self.net = torch.nn.Sequential(
                 torch.nn.Conv2d(n_input, n_output, kernel_size=kernel_size, padding=padding, stride=stride),
@@ -89,12 +90,17 @@ class FCN(torch.nn.Module):
                                                       torch.nn.Conv2d(n_input, n_output, kernel_size=1, stride=stride),
                                                       torch.nn.BatchNorm2d(n_output),
                                                       torch.nn.ReLU())
+            if maxpool:
+                self.net.add_module('maxpool2d', torch.nn.MaxPool2d(kernel_size=2))
+                self.downsample.add_module('maxpool2d', torch.nn.MaxPool2d(kernel_size=2))
+
         def forward(self, x):
             if self.downsample is not None:
                 return self.net(x) + self.downsample(x)
             return self.net(x)
 
-    def __init__(self, layers = [16, 32, 64, 128], stride = 2, kernel_size = 3, n_input_channels = 3):
+    def __init__(self, layers = [16, 32, 64, 128, 256], stride = 2, kernel_size = 3, n_input_channels = 3):
+
         super().__init__()
         """
         Your code here.
@@ -104,32 +110,55 @@ class FCN(torch.nn.Module):
         Hint: Use residual connections
         Hint: Always pad by kernel_size / 2, use an odd kernel_size
         """
+
+        # data_dir = '/dense_data/train' if device == 'cuda' else 'dense_data/train' # Can't use arguments here to pass the grader.
+        # train = load_dense_data(data_dir, batch_size=10000, shuffle=False, num_workers=0)
+        # train_data = next(iter(train))
+
+        try:
+            train_data = torch.load('train_data.pt')
+        except Exception:
+            train_data = torch.load('homework/train_data.pt')
+        except:
+            print('train_data.pt doesn\'t exist.')
+
+        train_data = train_data[0].to(device)
+
+        global TRAIN_MEAN
+        TRAIN_MEAN = train_data.mean(dim=[0], keepdims=True)
+        global TRAIN_STD
+        TRAIN_STD = train_data.std(dim=[0], keepdims=True)
+
         NUM_CLASSES = 5
         c = n_input_channels
         L = []
 
-        # Regular NN
-        # 3   -> 16 -> 32 -> 64 -> 128 -> 64 + 64 -> 32 + 32 -> 16 + 16 -> NUM_CLASSES
-        # 96  -> 48 -> 24 -> 12 -> 6   -> 12      -> 24      -> 48      -> 96
-        # 128 -> 64 -> 32 -> 16 -> 8   -> 16      -> 32      -> 64      -> 128
+        # C, W, H
+        # 3   -> 16 -> 32 -> 64 -> 128 -> 256 -> 128 -> 64 + 64 -> 32 + 32 -> 16 + 16 -> NUM_CLASSES
+        # 96  -> 48 -> 24 -> 12 -> 6   -> 3   -> 6   -> 12      -> 24      -> 48      -> 96
+        # 128 -> 64 -> 32 -> 16 -> 8   -> 4   -> 8   -> 16      -> 32      -> 64      -> 128
 
-        s, p, k = stride, stride//2, kernel_size
+        s, p, k = stride, stride // 2, kernel_size
 
         self.net1 = self.Block(n_input_channels, layers[0], stride=s, padding=p, kernel_size=k)
 
         self.net2 = self.Block(layers[0], layers[1], stride=s, padding=p, kernel_size=k)
-        self.down3 = torch.nn.Conv2d(layers[0], layers[0], kernel_size=1, stride = 1)
+        self.down4 = torch.nn.Conv2d(layers[0], layers[0], kernel_size=1, stride = 1)
 
         self.net3 = self.Block(layers[1], layers[2], stride=s, padding=p, kernel_size=k)
-        self.down2 = torch.nn.Conv2d(layers[1], layers[1], kernel_size=1, stride = 1)
+        self.down3 = torch.nn.Conv2d(layers[1], layers[1], kernel_size=1, stride = 1)
 
         self.net4 = self.Block(layers[2], layers[3], stride = s, padding = p, kernel_size=k)
-        self.down1 = torch.nn.Conv2d(layers[2], layers[2], kernel_size=1, stride = 1)
+        self.down2 = torch.nn.Conv2d(layers[2], layers[2], kernel_size=1, stride = 1)
 
-        self.net5 = torch.nn.ConvTranspose2d(layers[3], layers[2], kernel_size=k, stride=s, padding=p, output_padding=1)
-        self.net6 = torch.nn.ConvTranspose2d(layers[2] + layers[2], layers[1], kernel_size=k, stride=s, padding=p, output_padding=1)
-        self.net7 = torch.nn.ConvTranspose2d(layers[1] + layers[1], layers[0], kernel_size=k, stride=s, padding=p, output_padding=1)
-        self.net8 = torch.nn.ConvTranspose2d(layers[0] + layers[0], NUM_CLASSES, kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.net5 = self.Block(layers[3], layers[4], stride=s, padding=p, kernel_size=k)
+        self.down1 = torch.nn.Conv2d(layers[3], layers[3], kernel_size=1, stride = 1)
+
+        self.net6 = torch.nn.ConvTranspose2d(layers[4], layers[3], kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.net7 = torch.nn.ConvTranspose2d(layers[3] + layers[3], layers[2], kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.net8 = torch.nn.ConvTranspose2d(layers[2] + layers[2], layers[1], kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.net9 = torch.nn.ConvTranspose2d(layers[1] + layers[1], layers[0], kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.net10 = torch.nn.ConvTranspose2d(layers[0] + layers[0], NUM_CLASSES, kernel_size=k, stride=s, padding=p, output_padding=1)
 
         self.dropout = torch.nn.Dropout2d(0.2)
 
@@ -143,23 +172,30 @@ class FCN(torch.nn.Module):
               if required (use z = z[:, :, :H, :W], where H and W are the height and width of a corresponding strided
               convolution
         """
+        x -= TRAIN_MEAN
+        x /= TRAIN_STD
+
         x1 = self.net1(x)
         x2 = self.net2(x1)
         x3 = self.net3(x2)
         x4 = self.net4(x3)
+        x5 = self.net5(x4)
 
-        x5 = self.net5(x4)[:, :, :x3.shape[2], :x3.shape[3]] # Cut off potential over-padding caused by output_padding
-        x5 = torch.cat((x5, self.down1(x3)), 1)
+        x6 = self.net6(x5)[:, :, :x4.shape[2], :x4.shape[3]] # Cut off potential over-padding caused by output_padding
+        x6 = torch.cat((x6, self.down1(x4)), 1)
 
-        x6 = self.net6(x5)[:, :, :x2.shape[2], :x2.shape[3]]
-        x6 = torch.cat((x6, self.down2(x2)), 1)
+        x7 = self.net7(x6)[:, :, :x3.shape[2], :x3.shape[3]]
+        x7 = torch.cat((x7, self.down2(x3)), 1)
 
-        x7 = self.net7(x6)[:, :, :x1.shape[2], :x1.shape[3]]
-        x7 = torch.cat((x7, self.down3(x1)), 1)
+        x8 = self.net8(x7)[:, :, :x2.shape[2], :x2.shape[3]]
+        x8 = torch.cat((x8, self.down3(x2)), 1)
 
-        x8 = self.net8(x7)[:, :, :x.shape[2], :x.shape[3]]
+        x9 = self.net9(x8)[:, :, :x1.shape[2], :x1.shape[3]]
+        x9 = torch.cat((x9, self.down4(x1)), 1)
 
-        return x8
+        x10 = self.net10(x9)[:, :, :x.shape[2], :x.shape[3]]
+
+        return x10
 
 model_factory = {
     'cnn': CNNClassifier,
