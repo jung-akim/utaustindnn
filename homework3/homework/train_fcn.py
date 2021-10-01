@@ -61,18 +61,6 @@ def train(model, train_data, valid_data, device, n_epochs, optimizer, logdir, re
 
             counter += 1
             train_logger.add_scalar('loss', loss_val, global_step=counter)
-            train_logger.add_histogram('net8', model.net8.weight.grad, global_step=counter)
-            train_logger.add_histogram('down3', model.down3.weight.grad, global_step=counter)
-            train_logger.add_histogram('net7', model.net7.weight.grad, global_step=counter)
-            train_logger.add_histogram('down2', model.down2.weight.grad, global_step=counter)
-            train_logger.add_histogram('net6', model.net6.weight.grad, global_step=counter)
-            train_logger.add_histogram('down1', model.down1.weight.grad, global_step=counter)
-
-            train_logger.add_histogram('net5-conv1', model.net5.net[0].weight.grad, global_step=counter)
-            train_logger.add_histogram('net5-conv2', model.net5.net[3].weight.grad, global_step=counter)
-
-            train_logger.add_histogram('net4-conv1', model.net4.net[0].weight.grad, global_step=counter)
-            train_logger.add_histogram('net4-conv2', model.net4.net[3].weight.grad, global_step=counter)
 
             train_logger.add_histogram('net3-conv1', model.net3.net[0].weight.grad, global_step=counter)
             train_logger.add_histogram('net3-conv2', model.net3.net[3].weight.grad, global_step=counter)

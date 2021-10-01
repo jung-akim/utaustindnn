@@ -99,7 +99,7 @@ class FCN(torch.nn.Module):
                 return self.net(x) + self.downsample(x)
             return self.net(x)
 
-    def __init__(self, layers = [16, 32, 64, 128, 256], stride = 2, kernel_size = 3, n_input_channels = 3):
+    def __init__(self, layers = [32, 64, 128], stride = 2, kernel_size = 3, n_input_channels = 3):
 
         super().__init__()
         """
@@ -134,31 +134,31 @@ class FCN(torch.nn.Module):
         L = []
 
         # C, W, H
-        # 3   -> 16 -> 32 -> 64 -> 128 -> 256 -> 128 -> 64 + 64 -> 32 + 32 -> 16 + 16 -> NUM_CLASSES
-        # 96  -> 48 -> 24 -> 12 -> 6   -> 3   -> 6   -> 12      -> 24      -> 48      -> 96
-        # 128 -> 64 -> 32 -> 16 -> 8   -> 4   -> 8   -> 16      -> 32      -> 64      -> 128
-
+        # 3   -> 32 -> 32 -> 64 -> 64  -> 128  -> 64 -> 32 -> 16  -> 8  -> NUM_CLASSES
+        # 96  -> 48 -> 24 -> 12 -> 6   -> 3    -> 6  -> 12 -> 24 -> 48  -> 96
+        # 128 -> 64 -> 32 -> 16 -> 8   -> 4    -> 8  -> 16 -> 32 -> 64  -> 128
+        #        x1    x2    x3    x4     x5      u1    u2    u3    u4     u5
         s, p, k = stride, stride // 2, kernel_size
 
         self.net1 = self.Block(n_input_channels, layers[0], stride=s, padding=p, kernel_size=k)
+        self.down4 = torch.nn.Conv2d(layers[0], 8, kernel_size=1, stride=1)
+
+        self.maxpool = torch.nn.MaxPool2d(kernel_size=2)
+        self.down3 = torch.nn.Conv2d(layers[0], 16, kernel_size=1, stride = 1)
 
         self.net2 = self.Block(layers[0], layers[1], stride=s, padding=p, kernel_size=k)
-        self.down4 = torch.nn.Conv2d(layers[0], layers[0], kernel_size=1, stride = 1)
+        self.down2 = torch.nn.Conv2d(layers[1], layers[0], kernel_size=1, stride = 1)
+
+        self.maxpool = torch.nn.MaxPool2d(kernel_size=2)
+        self.down1 = torch.nn.Conv2d(layers[1], layers[1], kernel_size=1, stride = 1)
 
         self.net3 = self.Block(layers[1], layers[2], stride=s, padding=p, kernel_size=k)
-        self.down3 = torch.nn.Conv2d(layers[1], layers[1], kernel_size=1, stride = 1)
 
-        self.net4 = self.Block(layers[2], layers[3], stride = s, padding = p, kernel_size=k)
-        self.down2 = torch.nn.Conv2d(layers[2], layers[2], kernel_size=1, stride = 1)
-
-        self.net5 = self.Block(layers[3], layers[4], stride=s, padding=p, kernel_size=k)
-        self.down1 = torch.nn.Conv2d(layers[3], layers[3], kernel_size=1, stride = 1)
-
-        self.net6 = torch.nn.ConvTranspose2d(layers[4], layers[3], kernel_size=k, stride=s, padding=p, output_padding=1)
-        self.net7 = torch.nn.ConvTranspose2d(layers[3] + layers[3], layers[2], kernel_size=k, stride=s, padding=p, output_padding=1)
-        self.net8 = torch.nn.ConvTranspose2d(layers[2] + layers[2], layers[1], kernel_size=k, stride=s, padding=p, output_padding=1)
-        self.net9 = torch.nn.ConvTranspose2d(layers[1] + layers[1], layers[0], kernel_size=k, stride=s, padding=p, output_padding=1)
-        self.net10 = torch.nn.ConvTranspose2d(layers[0] + layers[0], NUM_CLASSES, kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.upconv1 = torch.nn.ConvTranspose2d(layers[2], layers[1], kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.upconv2 = torch.nn.ConvTranspose2d(layers[1]+layers[1], layers[0], kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.upconv3 = torch.nn.ConvTranspose2d(layers[0]+layers[0], 16, kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.upconv4 = torch.nn.ConvTranspose2d(16+16, 8, kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.upconv5 = torch.nn.ConvTranspose2d(8+8, NUM_CLASSES, kernel_size=k, stride=s, padding=p, output_padding=1)
 
         self.dropout = torch.nn.Dropout2d(0.2)
 
@@ -176,26 +176,26 @@ class FCN(torch.nn.Module):
         x /= TRAIN_STD
 
         x1 = self.net1(x)
-        x2 = self.net2(x1)
-        x3 = self.net3(x2)
-        x4 = self.net4(x3)
-        x5 = self.net5(x4)
+        x2 = self.maxpool(x1)
+        x3 = self.net2(x2)
+        x4 = self.maxpool(x3)
+        x5 = self.net3(x4)
 
-        x6 = self.net6(x5)[:, :, :x4.shape[2], :x4.shape[3]] # Cut off potential over-padding caused by output_padding
-        x6 = torch.cat((x6, self.down1(x4)), 1)
+        u1 = self.upconv1(x5)[:, :, :x4.shape[2], :x4.shape[3]] # Cut off potential over-padding caused by output_padding
+        u1 = torch.cat((u1, self.down1(x4)), 1)
 
-        x7 = self.net7(x6)[:, :, :x3.shape[2], :x3.shape[3]]
-        x7 = torch.cat((x7, self.down2(x3)), 1)
+        u2 = self.upconv2(u1)[:, :, :x3.shape[2], :x3.shape[3]]
+        u2 = torch.cat((u2, self.down2(x3)), 1)
 
-        x8 = self.net8(x7)[:, :, :x2.shape[2], :x2.shape[3]]
-        x8 = torch.cat((x8, self.down3(x2)), 1)
+        u3 = self.upconv3(u2)[:, :, :x2.shape[2], :x2.shape[3]]
+        u3 = torch.cat((u3, self.down3(x2)), 1)
 
-        x9 = self.net9(x8)[:, :, :x1.shape[2], :x1.shape[3]]
-        x9 = torch.cat((x9, self.down4(x1)), 1)
+        u4 = self.upconv4(u3)[:, :, :x1.shape[2], :x1.shape[3]]
+        u4 = torch.cat((u4, self.down4(x1)), 1)
 
-        x10 = self.net10(x9)[:, :, :x.shape[2], :x.shape[3]]
+        u5 = self.upconv5(u4)[:, :, :x.shape[2], :x.shape[3]]
 
-        return x10
+        return u5
 
 model_factory = {
     'cnn': CNNClassifier,
