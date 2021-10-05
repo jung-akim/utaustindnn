@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from homework.utils import *
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-TRAIN_MEAN, TRAIN_STD = 0., 0.
+TRAIN_MEAN, TRAIN_STD = 0., 1.
 
 class CNNClassifier(torch.nn.Module):
     class Block(torch.nn.Module):
@@ -143,13 +143,15 @@ class FCN(torch.nn.Module):
         self.net1 = self.Block(n_input_channels, layers[0], stride=s, padding=p, kernel_size=k)
         self.down4 = torch.nn.Conv2d(layers[0], 8, kernel_size=1, stride=1)
 
-        self.maxpool = torch.nn.MaxPool2d(kernel_size=2)
+        self.downpool = torch.nn.MaxPool2d(kernel_size=2)
+        self.net_except1 = self.Block(layers[0], layers[0], stride=s, padding=p, kernel_size=k)# if maxpool doesn't work (e.g. width or height is 1)
         self.down3 = torch.nn.Conv2d(layers[0], 16, kernel_size=1, stride = 1)
 
         self.net2 = self.Block(layers[0], layers[1], stride=s, padding=p, kernel_size=k)
         self.down2 = torch.nn.Conv2d(layers[1], layers[0], kernel_size=1, stride = 1)
 
-        self.maxpool = torch.nn.MaxPool2d(kernel_size=2)
+        self.downpool = torch.nn.MaxPool2d(kernel_size=2)
+        self.net_except2 = self.Block(layers[1], layers[1], stride=s, padding=p, kernel_size=k)
         self.down1 = torch.nn.Conv2d(layers[1], layers[1], kernel_size=1, stride = 1)
 
         self.net3 = self.Block(layers[1], layers[2], stride=s, padding=p, kernel_size=k)
@@ -172,13 +174,20 @@ class FCN(torch.nn.Module):
               if required (use z = z[:, :, :H, :W], where H and W are the height and width of a corresponding strided
               convolution
         """
-        x -= TRAIN_MEAN
-        x /= TRAIN_STD
+        if x.shape[1:] == TRAIN_MEAN.shape[1:]:
+            x -= TRAIN_MEAN
+            x /= TRAIN_STD
 
         x1 = self.net1(x)
-        x2 = self.maxpool(x1)
+        try:
+            x2 = self.maxpool(x1)
+        except:# When either width or height is too small to maxpool.
+            x2 = self.net_except1(x1)
         x3 = self.net2(x2)
-        x4 = self.maxpool(x3)
+        try:
+            x4 = self.maxpool(x3)
+        except:
+            x4 = self.net_except2(x3)
         x5 = self.net3(x4)
 
         u1 = self.upconv1(x5)[:, :, :x4.shape[2], :x4.shape[3]] # Cut off potential over-padding caused by output_padding
@@ -221,8 +230,9 @@ def load_model(model):
 
 if __name__ == '__main__':
     model = FCN()
-    x = torch.rand(128, 3, 96, 128)
+    # x = torch.rand(128, 3, 96, 128)
     # x = torch.rand(1, 3, 1, 1)
+    x = torch.rand(1, 3, 32, 1)
     model.eval()
     y = model(x)
 
