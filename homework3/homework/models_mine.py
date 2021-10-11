@@ -99,7 +99,17 @@ class FCN(torch.nn.Module):
                 return self.net(x) + self.downsample(x)
             return self.net(x)
 
-    def __init__(self, layers = [32, 64, 128], stride = 2, kernel_size = 3, n_input_channels = 3):
+    class UpBlock(torch.nn.Module):
+        def __init__(self, n_input, n_output, kernel_size = 3, stride = 2, padding = 1, output_padding = 1):
+            super().__init__()
+            k, s, p, o = kernel_size, stride, padding, output_padding
+            self.net = torch.nn.Sequential(torch.nn.ConvTranspose2d(n_input, n_output, kernel_size=k, stride=s, padding=p, output_padding=o),
+                                           torch.nn.BatchNorm2d(n_output),
+                                           torch.nn.ReLU())
+        def forward(self, x):
+            return self.net(x)
+
+    def __init__(self, layers = [16, 32, 64, 128], stride = 2, kernel_size = 3, n_input_channels = 3):
 
         super().__init__()
         """
@@ -125,16 +135,16 @@ class FCN(torch.nn.Module):
         train_data = train_data[0].to(device)
 
         global TRAIN_MEAN
-        TRAIN_MEAN = train_data.mean(dim=[0], keepdims=True)
+        TRAIN_MEAN = train_data.mean(dim=[0,2,3], keepdims=True)
         global TRAIN_STD
-        TRAIN_STD = train_data.std(dim=[0], keepdims=True)
+        TRAIN_STD = train_data.std(dim=[0,2,3], keepdims=True)
 
         NUM_CLASSES = 5
         c = n_input_channels
         L = []
 
         # C, W, H
-        # 3   -> 32 -> 32 -> 64 -> 64  -> 128  -> 64 -> 32 -> 16  -> 8  -> NUM_CLASSES
+        # 3   -> 16 -> 32 -> 64 -> 64  -> 128  -> 64 -> 32 -> 16  -> 8  -> NUM_CLASSES
         # 96  -> 48 -> 24 -> 12 -> 6   -> 3    -> 6  -> 12 -> 24 -> 48  -> 96
         # 128 -> 64 -> 32 -> 16 -> 8   -> 4    -> 8  -> 16 -> 32 -> 64  -> 128
         #        x1    x2    x3    x4     x5      u1    u2    u3    u4     u5
@@ -143,24 +153,23 @@ class FCN(torch.nn.Module):
         self.net1 = self.Block(n_input_channels, layers[0], stride=s, padding=p, kernel_size=k)
         self.down4 = torch.nn.Conv2d(layers[0], 8, kernel_size=1, stride=1)
 
-        self.downpool = torch.nn.MaxPool2d(kernel_size=2)
-        self.net_except1 = self.Block(layers[0], layers[0], stride=s, padding=p, kernel_size=k)# if maxpool doesn't work (e.g. width or height is 1)
-        self.down3 = torch.nn.Conv2d(layers[0], 16, kernel_size=1, stride = 1)
-
         self.net2 = self.Block(layers[0], layers[1], stride=s, padding=p, kernel_size=k)
-        self.down2 = torch.nn.Conv2d(layers[1], layers[0], kernel_size=1, stride = 1)
-
-        self.downpool = torch.nn.MaxPool2d(kernel_size=2)
-        self.net_except2 = self.Block(layers[1], layers[1], stride=s, padding=p, kernel_size=k)
-        self.down1 = torch.nn.Conv2d(layers[1], layers[1], kernel_size=1, stride = 1)
+        self.down3 = torch.nn.Conv2d(layers[1], 16, kernel_size=1, stride = 1)
 
         self.net3 = self.Block(layers[1], layers[2], stride=s, padding=p, kernel_size=k)
+        self.down2 = torch.nn.Conv2d(layers[2], layers[1], kernel_size=1, stride = 1)
 
-        self.upconv1 = torch.nn.ConvTranspose2d(layers[2], layers[1], kernel_size=k, stride=s, padding=p, output_padding=1)
-        self.upconv2 = torch.nn.ConvTranspose2d(layers[1]+layers[1], layers[0], kernel_size=k, stride=s, padding=p, output_padding=1)
-        self.upconv3 = torch.nn.ConvTranspose2d(layers[0]+layers[0], 16, kernel_size=k, stride=s, padding=p, output_padding=1)
-        self.upconv4 = torch.nn.ConvTranspose2d(16+16, 8, kernel_size=k, stride=s, padding=p, output_padding=1)
-        self.upconv5 = torch.nn.ConvTranspose2d(8+8, NUM_CLASSES, kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.downpool = torch.nn.MaxPool2d(kernel_size=2)
+        self.net_except = self.Block(layers[2], layers[2], stride=s, padding=p, kernel_size=k)
+        self.down1 = torch.nn.Conv2d(layers[2], layers[2], kernel_size=1, stride = 1)
+
+        self.net4 = self.Block(layers[2], layers[3], stride=s, padding=p, kernel_size=k)
+
+        self.upconv1 = self.UpBlock(layers[3], layers[2], kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.upconv2 = self.UpBlock(layers[2]+layers[2], layers[1], kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.upconv3 = self.UpBlock(layers[1]+layers[1], layers[0], kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.upconv4 = self.UpBlock(layers[0]+layers[0], 8, kernel_size=k, stride=s, padding=p, output_padding=1)
+        self.upconv5 = self.UpBlock(8+8, NUM_CLASSES, kernel_size=k, stride=s, padding=p, output_padding=1)
 
         self.dropout = torch.nn.Dropout2d(0.2)
 
@@ -179,16 +188,13 @@ class FCN(torch.nn.Module):
             x /= TRAIN_STD
 
         x1 = self.net1(x)
-        try:
-            x2 = self.maxpool(x1)
-        except:# When either width or height is too small to maxpool.
-            x2 = self.net_except1(x1)
-        x3 = self.net2(x2)
+        x2 = self.net2(x1)
+        x3 = self.net3(x2)
         try:
             x4 = self.maxpool(x3)
         except:
-            x4 = self.net_except2(x3)
-        x5 = self.net3(x4)
+            x4 = self.net_except(x3)
+        x5 = self.net4(x4)
 
         u1 = self.upconv1(x5)[:, :, :x4.shape[2], :x4.shape[3]] # Cut off potential over-padding caused by output_padding
         u1 = torch.cat((u1, self.down1(x4)), 1)
